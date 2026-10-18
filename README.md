@@ -1,6 +1,6 @@
 # Моніторинг оренди: ЖК Нова Англія
 
-Кожні 15 хвилин GitHub Actions перевіряє LUN, Flatfy, DOM.RIA, Rieltor і OLX і надсилає нові підходящі квартири в Telegram-бот.
+Кожні 15 хвилин GitHub Actions перевіряє LUN, DOM.RIA і Rieltor (LUN також підтягує оголошення з OLX; Flatfy і OLX напряму блокують сервери GitHub) і надсилає нові підходящі квартири в Telegram-бот.
 
 ## Фільтри
 

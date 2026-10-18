@@ -417,6 +417,8 @@ def main():
     for name, fn in SOURCES.items():
         if only and name not in only:
             continue
+        if not CONFIG["sources"].get(name):
+            continue
         try:
             items = fn(pages)
             if not items:

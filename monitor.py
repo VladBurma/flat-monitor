@@ -308,12 +308,148 @@ def src_olx(pages):
     return out
 
 
+# ---------------------------------------------------------------- Telegram-група
+# Бот має бути учасником групи з вимкненим privacy mode (@BotFather → /setprivacy → Disable).
+_STATE = {}
+RENT_WORDS = r"оренд|аренд|здам|здаю|здається|здаеться|здается|сдам|сдаю|сдается|сдаётся|в найм|винайм"
+SEEK_WORDS = r"шукаю|шукаємо|ищу|ищем|зніму|сниму|орендую|арендую"
+SALE_WORDS = r"продаж|продам|продаю|продається|продается|продажа"
+FLAT_WORDS = r"кварт|кімнат|комнат|студі|студи|smart|смарт|\d\s*-?\s*к\b|\d\s*-?\s*кім|\d\s*-?\s*ком|м2|м²|кв\.?\s*м"
+
+
+def parse_flat_text(text):
+    t = text.replace(" ", " ")
+    low = t.lower()
+    # прибираємо телефони, щоб не плутати їх з ціною
+    clean = re.sub(r"\+?\d[\d\s\-()]{8,}\d", " ", low)
+    res = {"is_rent": False, "price": None, "currency": "UAH", "area": None,
+           "floor": None, "floors": None, "rooms": None}
+    if not re.search(RENT_WORDS, clean):
+        return res
+    if re.search(SEEK_WORDS, clean):
+        return res
+    if re.search(SALE_WORDS, clean) and not re.search(r"оренд|аренд|здам|сдам|здаю|сдаю", clean):
+        return res
+    if not re.search(FLAT_WORDS, clean):
+        return res      # паркомісця, комори тощо
+    res["is_rent"] = True
+
+    # ціна
+    num_re = r"(\d{1,3}(?:[ .,]\d{3})+|\d+(?:[.,]\d+)?)"
+    cands = []
+    for m in re.finditer(num_re + r"\s*(тис\.?|тыс\.?|k|к)?\s*(грн|uah|₴|гривен|гривень|\$|usd|дол|у\.?\s*е|€|eur|євро|евро)", clean):
+        cands.append((m.start(), m.group(1), m.group(2), m.group(3)))
+    for m in re.finditer(r"(\$|€)\s*" + num_re, clean):
+        cands.append((m.start(), m.group(2), None, m.group(1)))
+    for m in re.finditer(r"(?:ціна|цена|вартість|стоимость|оплата)[^\d\n]{0,15}" + num_re + r"\s*(тис\.?|тыс\.?|k|к)?", clean):
+        cands.append((m.start(), m.group(1), m.group(2), None))
+    if cands:
+        cands.sort()
+        _, n, mult, cur = cands[0]
+        val = float(re.sub(r"[ .,](?=\d{3}\b)", "", n).replace(",", "."))
+        if mult:
+            val *= 1000
+        cur = cur or ""
+        if cur in ("$", "usd") or cur.startswith("дол") or cur.startswith("у"):
+            res["currency"] = "USD"
+        elif cur in ("€", "eur", "євро", "евро"):
+            res["currency"] = "EUR"
+        elif not cur and val < 3000:
+            res["currency"] = "USD"      # «ціна 700» майже завжди долари
+        if val >= 100:
+            res["price"] = val
+
+    # площа
+    m = re.search(r"(\d{2,3}(?:[.,]\d)?)\s*(?:м2|м²|м\.?\s*кв|кв\.?\s*м|кв\b|метр|m2|м(?![а-яіїєґa-z]))", clean)
+    if m:
+        res["area"] = float(m.group(1).replace(",", "."))
+    else:
+        m = re.search(r"площ\w*[^\d\n]{0,12}(\d{2,3}(?:[.,]\d)?)", clean)
+        if m:
+            res["area"] = float(m.group(1).replace(",", "."))
+
+    # поверх
+    m = (re.search(r"(\d{1,2})\s*(?:-?\s*(?:й|ий|ій|ом|му))?\s*(?:поверх|этаж|пов\b)", clean)
+         or re.search(r"(?:поверх|этаж)\w*[^\d\n]{0,5}(\d{1,2})", clean))
+    if m:
+        res["floor"] = int(m.group(1))
+        m2 = (re.search(r"(?:поверх|этаж)\w*[^\d\n]{0,5}\d{1,2}\s*(?:/|з|из|із)\s*(\d{1,2})", clean)
+              or re.search(r"\d{1,2}\s*(?:-?\s*(?:й|ий|ій|ом|му))?\s*(?:поверх|этаж)\w*\s*(?:/|з|из|із)\s*(\d{1,2})", clean))
+        if m2:
+            res["floors"] = int(m2.group(1))
+    else:
+        for m in re.finditer(r"(?<![\d/])(\d{1,2})\s*/\s*(\d{1,2})(?![\d/])(?!\s*(?:м|кв))", clean):
+            a, b = int(m.group(1)), int(m.group(2))
+            if 1 <= a <= b and 9 <= b <= 30:
+                res["floor"], res["floors"] = a, b
+                break
+
+    # кімнати
+    m = re.search(r"(\d)\s*-?\s*(?:х\s*)?(?:к\b|кім|ком|кк)", clean)
+    if m:
+        res["rooms"] = int(m.group(1))
+    elif re.search(r"студі|студи|smart|смарт", clean):
+        res["rooms"] = 1
+    return res
+
+
+def src_tg(pages):
+    chat = (CONFIG.get("tg_group") or "").lstrip("@").lower()
+    if not TOKEN:
+        return []
+    st = _STATE.setdefault("tg", {"offset": 0, "albums": {}})
+    r = requests.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates",
+                     params={"offset": st["offset"], "timeout": 0, "limit": 100,
+                             "allowed_updates": json.dumps(["message", "channel_post"])},
+                     timeout=30).json()
+    if not r.get("ok"):
+        raise RuntimeError(f"getUpdates: {r.get('description')}")
+    out, groups = [], {}
+    for u in r["result"]:
+        st["offset"] = u["update_id"] + 1
+        msg = u.get("message") or u.get("channel_post")
+        if not msg:
+            continue
+        c = msg.get("chat", {})
+        if c.get("type") not in ("group", "supergroup", "channel"):
+            continue
+        if chat and (c.get("username") or "").lower() != chat:
+            continue
+        text = msg.get("text") or msg.get("caption") or ""
+        photo = msg["photo"][-1]["file_id"] if msg.get("photo") else None
+        key = msg.get("media_group_id") or f"m{msg['message_id']}"
+        g = groups.setdefault(key, {"text": "", "photo": None, "msg": msg})
+        if text and not g["text"]:
+            g["text"], g["msg"] = text, msg
+        g["photo"] = g["photo"] or photo
+    for g in groups.values():
+        if not g["text"]:
+            continue
+        p = parse_flat_text(g["text"])
+        if not p["is_rent"]:
+            continue
+        msg = g["msg"]
+        c = msg["chat"]
+        if c.get("username"):
+            url = f"https://t.me/{c['username']}/{msg['message_id']}"
+        else:
+            url = f"https://t.me/c/{str(c['id']).replace('-100', '', 1)}/{msg['message_id']}"
+        snippet = re.sub(r"\s+", " ", g["text"]).strip()[:150]
+        x = listing("Telegram", url, p["price"], p["currency"], area=p["area"],
+                    floor=p["floor"], floors=p["floors"], rooms=p["rooms"],
+                    address=snippet, photo=g["photo"])
+        x["key"] = f"tg:{c['id']}:{msg['message_id']}"
+        out.append(x)
+    return out
+
+
 SOURCES = {
     "lun": src_lun,
     "flatfy": src_flatfy,
     "domria": src_domria,
     "rieltor": src_rieltor,
     "olx": src_olx,
+    "tg": src_tg,
 }
 
 
@@ -408,7 +544,9 @@ def keys_of(x):
 
 
 def main():
+    global _STATE
     st = load_state()
+    _STATE = st
     bootstrap = not st["seen"]
     pages = BOOTSTRAP_PAGES if bootstrap else REGULAR_PAGES
     only = [s for s in os.environ.get("ONLY_SOURCES", "").split(",") if s]
@@ -421,7 +559,7 @@ def main():
             continue
         try:
             items = fn(pages)
-            if not items:
+            if not items and name != "tg":
                 raise RuntimeError("0 оголошень (можливо змінилась верстка)")
             log(f"{name}: {len(items)} оголошень")
             collected += items

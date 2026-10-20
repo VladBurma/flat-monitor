@@ -1,7 +1,7 @@
 {
   "chat_id": "309336404",
-  "max_price_uah": 30000,
-  "min_area": 45,
+  "max_price_uah": null,
+  "min_area": null,
   "max_floor": 8,
   "sources": {
     "lun": "https://lun.ua/rent/kyiv/nova-anhliia?sort=insert_time",

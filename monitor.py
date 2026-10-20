@@ -455,13 +455,27 @@ SOURCES = {
 
 # ---------------------------------------------------------------- фільтр
 def matches(x):
-    if x["price_uah"] is not None and x["price_uah"] > CONFIG["max_price_uah"]:
+    max_price = CONFIG.get("max_price_uah")
+    min_area = CONFIG.get("min_area")
+    max_floor = CONFIG.get("max_floor")
+    if max_price and x["price_uah"] is not None and x["price_uah"] > max_price:
         return False
-    if x["area"] is not None and x["area"] < CONFIG["min_area"]:
+    if min_area and x["area"] is not None and x["area"] < min_area:
         return False
-    if x["floor"] is not None and x["floor"] > CONFIG["max_floor"]:
+    if max_floor and x["floor"] is not None and x["floor"] > max_floor:
         return False
     return True
+
+
+def filter_text():
+    parts = []
+    if CONFIG.get("max_price_uah"):
+        parts.append(f"до {CONFIG['max_price_uah']:,} грн".replace(",", " "))
+    if CONFIG.get("min_area"):
+        parts.append(f"від {CONFIG['min_area']} м²")
+    if CONFIG.get("max_floor"):
+        parts.append(f"поверх до {CONFIG['max_floor']} (або не вказаний)")
+    return ", ".join(parts) or "без фільтрів"
 
 
 # ---------------------------------------------------------------- Telegram
@@ -592,10 +606,8 @@ def main():
 
     if bootstrap:
         if new:
-            price = f"{CONFIG['max_price_uah']:,}".replace(",", " ")
             head = (f"🔎 Моніторинг ЖК Нова Англія запущено.\n"
-                    f"Фільтр: до {price} грн, від {CONFIG['min_area']} м², "
-                    f"поверх до {CONFIG['max_floor']} (або не вказаний).\n\n"
+                    f"Фільтр: {filter_text()}.\n\n"
                     f"Зараз підходять такі оголошення ({len(new)}):")
             tg("sendMessage", chat_id=CHAT_ID, text=head)
             for x in new[:40]:

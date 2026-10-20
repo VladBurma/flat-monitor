@@ -1,12 +1,16 @@
 name: flat-monitor
 
+# Один запуск працює ~5.5 год і перевіряє сайти кожні 15 хв,
+# а наприкінці сам запускає наступний. Розклад cron — запасний
+# варіант, якщо ланцюжок колись обірветься.
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7 */3 * * *"
   workflow_dispatch: {}
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: flat-monitor
@@ -15,7 +19,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -25,18 +29,28 @@ jobs:
 
       - run: pip install requests==2.32.3
 
-      - name: Перевірити сайти
+      - name: Перевіряти сайти кожні 15 хв
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-        run: python monitor.py
-
-      - name: Зберегти переглянуті оголошення
         run: |
           git config user.name "flat-monitor"
           git config user.email "flat-monitor@users.noreply.github.com"
-          git add seen.json
-          if ! git diff --cached --quiet; then
-            git commit -m "seen: $(date -u +%Y-%m-%dT%H:%M)"
-            git pull --rebase -X theirs || true
-            git push
-          fi
+          end=$(( $(date +%s) + 330*60 ))
+          while :; do
+            echo "=== $(TZ=Europe/Kyiv date '+%d.%m %H:%M') ==="
+            python monitor.py || echo "monitor.py завершився з помилкою"
+            git add seen.json
+            if ! git diff --cached --quiet; then
+              git commit -q -m "seen: $(date -u +%Y-%m-%dT%H:%M)"
+              git pull -q --rebase -X theirs || true
+              git push -q || echo "push не вдався"
+            fi
+            [ $(( $(date +%s) + 15*60 )) -lt $end ] || break
+            sleep 900
+          done
+
+      - name: Запустити наступний цикл
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run monitor.yml --ref main -R "$GITHUB_REPOSITORY"

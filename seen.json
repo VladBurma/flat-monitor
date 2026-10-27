@@ -1,14 +1,16 @@
 {
-"alerted": [],
+"alerted": [
+"rieltor"
+],
 "fails": {
 "domria": 0,
 "flatfy": 1,
 "lun": 0,
 "olx": 1,
-"rieltor": 7,
+"rieltor": 8,
 "tg": 0
 },
-"last_run": "2026-10-27 12:29",
+"last_run": "2026-10-27 12:44",
 "seen": {
 "domria:32669851": 1792338187.8260503,
 "domria:33378148": 1792338187.8260503,
